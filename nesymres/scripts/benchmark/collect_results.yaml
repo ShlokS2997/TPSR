@@ -1,4 +1,6 @@
-
 pointwise_acc_rtol: 0.05
 pointwise_acc_atol: 0.001
 num_test_points: 10_000
+
+# Add this for cross-validation
+num_folds: 5  # Set to the number of cross-validation folds you want to use
