@@ -8,10 +8,17 @@ import random
 
 
 
-def log_error(msg:str, log_loc:str):
+def log_results(msg: str, log_loc: str):
+    """
+    Logs any results or metrics to a specified file.
+    Args:
+        msg: The message (results/metrics) to log.
+        log_loc: The path where the log file is stored.
+    """
     print(msg)
-    with open(log_loc, 'w') as f:
-        f.write(msg)
+    with open(log_loc, 'a') as f:  # Changed to 'a' to append to the log file
+        f.write(msg + "\n")
+
 
 
 # output related
@@ -23,28 +30,41 @@ def colored_background(r, g, b, text):
     return f'\033[48;2;{clip_and_int(r)};{clip_and_int(g)};{clip_and_int(b)}m{text}\033[0m'
 
 
-def print_colored_output(char_and_uncertainties):
+def print_colored_output(char_and_uncertainties, fold_results=None):
     """
     Args:
         char_and_uncertainties: a list of (char, uncertainty) pairs
+        fold_results: a list of cross-validation fold results (e.g., accuracy or error rates).
+                      Values should be between 0 and 1, where 1 indicates the best result.
     """
+    # Existing functionality for uncertainties
     uncertainties = [u for (c, u) in char_and_uncertainties]
     uncertainties = np.clip(uncertainties, 0, 1)
     hist, _ = np.histogram(uncertainties, bins=10, range=(0., 1.))
-    print('uncertainty hist')
+    print('Uncertainty histogram:')
     print(hist)
 
-    print('all char and uncertainties')
+    print('All char and uncertainties:')
     pprint.pprint(char_and_uncertainties)
 
+    # Print each character with uncertainty-based color
     for char, uncertainty in char_and_uncertainties:
         if '\n' in char:
-            print(char, end='') # has issues in rendering \n, so ignore it
+            print(char, end='')  # Ignore rendering for newline chars
         else:
-            r = int(np.clip(255 * uncertainty, 0, 255)) # clip to make sure it's in range, otherwise simply output black color, which would be hard to debug
+            r = int(np.clip(255 * uncertainty, 0, 255))  # Red intensity based on uncertainty
             print(colored_background(r, 50, 50, char), end='')
     print()
 
+    # If fold_results is provided, visualize them
+    if fold_results:
+        print('\nCross-Validation Fold Results:')
+        for i, result in enumerate(fold_results):
+            # Color intensity based on the result, better results (closer to 1) will appear greener
+            r = int(np.clip(255 * (1 - result), 0, 255))  # Inverse for better performance (lower red)
+            g = int(np.clip(255 * result, 0, 255))        # More green for better performance
+            print(colored_background(r, g, 50, f'Fold {i + 1}: {result:.4f}'), end=' ')
+        print('\n')  # Newline after printing all fold results
 
 def execute(command, working_dir='./'):
     print(f"Running {command}")
