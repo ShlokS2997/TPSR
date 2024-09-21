@@ -62,56 +62,40 @@ def main(cfg):
     return collect_results(cfg)
 
 
+from sklearn.model_selection import KFold
+
 def collect_results(cfg):
     loader = process.file_loader.FileLoader("results.json")
-    df = loader.load_folder(hydra.utils.to_absolute_path("fin_res_v2")).T    
-    #f = raw_df.loc[[0,("other","test_path"),("other","name"),("other", "eq"),("other", "benchmark_name") ]]
-     
-    eqs = list(df.loc[:,[("other", "equation_idx")]].values.reshape(-1))
-    
-    res = []
-    for i in range(len(df)):
-        with open(df['path'].iloc[i].values[0]) as json_file:
-            json_data = json.load(json_file)
-            res.append(json_data)
-    best_eq = [x["equation"][0] if x["equation"] else None for x in res]
-    duration = [x["duration"] for x in res]
-    df.loc[:,"pred_eq"] = best_eq
-    df.loc[:,"duration"] = duration
-    df.index = eqs
+    df = loader.load_folder(hydra.utils.to_absolute_path("fin_res_v2")).T
 
-    eval_rows = []
+    # Initialize KFold cross-validation
+    kf = KFold(n_splits=cfg.num_folds)  # Number of folds from config
+    fold_results = []
 
-    for idx, df_row in tqdm(df.iterrows(), desc='Evaluate equations...'):
-        if df_row.pred_eq[0]:
-            assert getattr(df_row, 'model_path', None) is None
-            metrics = evaluate_equation(
-                pred_equation=df_row.pred_eq[0],
-                benchmark_name=hydra.utils.to_absolute_path(df_row.loc[[("other", "benchmark_path")]][0]),
-                equation_idx=df_row.loc[[("other", "equation_idx")]][0],
-                cfg=cfg)
-        else:
-            metrics = {}
-        # else:
-        #     model_path = reroute_path(df_row.model_path, df_row.output_dir,
-        #         root_dirs)
-        #     metrics = evaluate_sklearn(
-        #         model_path=model_path,
-        #         benchmark_name=df_row.benchmark_name,
-        #         equation_idx=df_row.equation_idx,
-        #         num_test_points=cfg.NUM_TEST_POINTS,
-        #         pointwise_acc_rtol=cfg.POINTWISE_ACC_RTOL,
-        #         pointwise_acc_atol=cfg.POINTWISE_ACC_ATOL
-        #     )
-        eval_row = df_row.to_dict()
-        eval_row.update(metrics)
-        eval_rows.append(eval_row)
+    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(df)):  # Splitting the dataset
+        print(f"Processing fold {fold_idx + 1}")
+        
+        train_df = df.iloc[train_idx]
+        val_df = df.iloc[val_idx]
 
-    
-    eval_df = pd.DataFrame(eval_rows)
+        res = []
+        for i in range(len(val_df)):  # Evaluate validation data
+            with open(val_df['path'].iloc[i].values[0]) as json_file:
+                json_data = json.load(json_file)
+                res.append(json_data)
+
+        best_eq = [x["equation"][0] if x["equation"] else None for x in res]
+        duration = [x["duration"] for x in res]
+
+        val_df.loc[:, "pred_eq"] = best_eq
+        val_df.loc[:, "duration"] = duration
+        fold_results.append(val_df)
+
+    # Concatenate results from all folds
+    eval_df = pd.concat(fold_results)
     eval_df.to_csv('eval_df_v2.csv')
 
-    return eval_df #, root_dirs
+    return eval_df
 
 
 def get_pointwise_acc(y_true, y_pred, rtol, atol):
