@@ -6,9 +6,12 @@ name: results
 benchmark_path: test_set/nc.csv
 equation_idx: 0
 
+# Add this for cross-validation
+num_folds: 5  # Number of folds for cross-validation
+
 hydra:
   sweep:
-      dir: runs/${model.model_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: runs/${model.model_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   overrides:
-      task:
-        - equation_idx=range(0,200)  
+    task:
+      - equation_idx=range(0,200)
