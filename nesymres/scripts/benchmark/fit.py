@@ -89,43 +89,76 @@ def evaluate_sklearn(model_path, benchmark_path, equation_idx,
                           pointwise_acc_rtol, pointwise_acc_atol)
 
 
+from sklearn.model_selection import KFold
+
 @hydra.main(config_name="fit")
 def main(cfg):
-    target_path = hydra.utils.to_absolute_path(cfg.name)
-    model = get_model(cfg)
-    eq = benchmark.load_equation(hydra.utils.to_absolute_path(cfg.benchmark_path),cfg.equation_idx)
+    # Load the benchmark equation
+    eq = benchmark.load_equation(hydra.utils.to_absolute_path(cfg.benchmark_path), cfg.equation_idx)
+    
+    # Try to load the data for the benchmark
     try:
-        X_train, y_train, = benchmark.get_robust_data(eq, mode="iid", cfg=cfg)
+        X, y = benchmark.get_robust_data(eq, mode="iid", cfg=cfg)
     except ValueError:
         return None
-    start_time = time.perf_counter()
     
-    model.fit(X_train, y_train)
-    duration = time.perf_counter() - start_time
-    if hasattr(model, 'get_equation'):
-        equation = model.get_equation()
-        model_path = None
-    else:
-        equation = None
-        model_path = str(targe_path / 'model.pkl')
-        try:
-            delattr(model, '_programs')
-        except AttributeError:
-            pass
-
-        with open(model_path, 'wb') as f:
-            pickle.dump(model, f)
+    # Initialize KFold cross-validation
+    kf = KFold(n_splits=cfg.num_folds)  # Number of folds specified in the config
+    fold_results = []
+    
+    # Cross-validation loop
+    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X)):
+        print(f"Processing fold {fold_idx + 1}/{cfg.num_folds}")
+        
+        # Split the data into training and validation sets
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        
+        # Get the model
+        model = get_model(cfg)
+        
+        # Measure the time taken for training
+        start_time = time.perf_counter()
+        model.fit(X_train, y_train)
+        duration = time.perf_counter() - start_time
+        
+        # Predict and evaluate the model on the validation set
+        if hasattr(model, 'get_equation'):
+            equation = model.get_equation()
+            model_path = None
+        else:
+            equation = None
+            model_path = str(Path(f"model_fold_{fold_idx}.pkl"))
+            with open(model_path, 'wb') as f:
+                pickle.dump(model, f)
+        
+        y_pred = model.fitfunc(X_val)
+        r2 = r2_score(y_val, y_pred)
+        mse = mean_squared_error(y_val, y_pred)
+        
+        # Store results for the current fold
+        fold_result = {
+            'fold': fold_idx + 1,
+            'duration': duration,
+            'equation': equation,
+            'model_path': model_path,
+            'r2': r2,
+            'mse': mse
+        }
+        
+        fold_results.append(fold_result)
+    
+    # Save fold-specific results in a JSON file
     output_data = {
-        'duration': duration,
-        'equation': equation,
-        'model_path': model_path,
-        "benchmark_path": cfg.benchmark_path,
-        "idx": cfg.equation_idx
+        'fold_results': fold_results,
+        'benchmark_path': cfg.benchmark_path,
+        'equation_idx': cfg.equation_idx
     }
-    if hasattr(model, 'metrics') and isinstance(model.metrics, dict):
-        output_data.update(model.metrics)
-    with open('results.json', 'w') as f:
+    
+    with open('cross_validation_results.json', 'w') as f:
         json.dump(output_data, f, indent=2)
+    
+    return fold_results
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
