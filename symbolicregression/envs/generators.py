@@ -876,7 +876,63 @@ class RandomFunctions(Generator):
             datapoints["predict_{}".format(sigma_factor)] = (inputs, outputs)
 
         return tree, datapoints
+    def cross_validation(self, tree, n_splits=5, n_input_points=1000, **kwargs):
+        # Split data into n_splits and perform cross-validation
+        indices = np.arange(n_input_points)
+        np.random.shuffle(indices)
+        split_indices = np.array_split(indices, n_splits)
+        scores = []
 
+        for i in range(n_splits):
+            train_indices = np.concatenate(split_indices[:i] + split_indices[i+1:])
+            test_indices = split_indices[i]
+
+            # Generate training and testing data
+            train_data, _ = self._generate_datapoints(tree, n_input_points, scale=1, rng=np.random.RandomState(0), input_dimension=1, input_distribution_type="gaussian", n_centroids=5, max_trials=10)
+            _, test_data = self._generate_datapoints(tree, n_input_points, scale=1, rng=np.random.RandomState(0), input_dimension=1, input_distribution_type="gaussian", n_centroids=5, max_trials=10)
+
+            # Calculate scores (e.g., mean squared error)
+            score = self.evaluate_model(train_data, test_data)
+            scores.append(score)
+
+        return np.mean(scores)
+
+    def evaluate_model(self, train_data, test_data):
+        # Placeholder for model evaluation logic
+        return np.random.rand()  # Replace with actual evaluation metric
+
+
+def load_data(env):
+    data = np.load('your_data_file.npy')  # Adjust based on your data source
+    return data
+
+def create_data_loaders(training_data, validation_data):
+    train_loader = DataLoader(training_data, batch_size=32, shuffle=True)  # Adjust batch size as needed
+    valid_loader = DataLoader(validation_data, batch_size=32, shuffle=False)
+    return train_loader, valid_loader
+
+def reset_parameters(env):
+    env.model.initialize_parameters()  # Replace with your actual model parameter reset method
+
+def train_one_epoch(env, train_loader):
+    for batch in train_loader:
+        # Forward pass
+        outputs = env.model(batch['inputs'])
+        loss = compute_loss(outputs, batch['targets'])  # Define compute_loss based on your loss function
+        # Backward pass
+        loss.backward()
+        env.optimizer.step()  # Update weights
+        env.optimizer.zero_grad()  # Reset gradients
+
+def evaluate(env, valid_loader):
+    total_loss = 0
+    for batch in valid_loader:
+        with torch.no_grad():
+            outputs = env.model(batch['inputs'])
+            loss = compute_loss(outputs, batch['targets'])
+            total_loss += loss.item()
+    avg_loss = total_loss / len(valid_loader)
+    logger.info(f'Validation Loss: {avg_loss}')
 
 if __name__ == "__main__":
 
