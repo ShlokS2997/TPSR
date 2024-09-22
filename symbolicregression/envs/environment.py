@@ -232,7 +232,7 @@ class FunctionEnvironment(object):
                 if self.params.debug:
                     pass
                 continue
-
+    
     @timeout(1)
     def _gen_expr(
         self,
@@ -726,7 +726,68 @@ class FunctionEnvironment(object):
         #     default="1,2,4,8,16",
         #     help="sigmas value for generation predicts",
         # )
+    def cross_validate(self, k_folds=5):
+        """
+        Perform k-fold cross-validation.
+        """
+        all_data = self.load_data()  # Load your dataset
+        fold_size = len(all_data) // k_folds
+        
+        for fold in range(k_folds):
+            logger.info(f"Starting fold {fold + 1}/{k_folds}")
 
+            # Split the data into training and validation sets
+            validation_data = all_data[fold * fold_size:(fold + 1) * fold_size]
+            training_data = np.concatenate([all_data[:fold * fold_size], all_data[(fold + 1) * fold_size:]])
+
+            # Create data loaders
+            train_loader = self.create_data_loader(training_data)
+            valid_loader = self.create_data_loader(validation_data)
+
+            # Reset parameters if necessary
+            self.reset_parameters()
+
+            # Train the model
+            for epoch in range(self.params.n_epochs):
+                self.train_one_epoch(train_loader)
+
+            # Evaluate on validation set
+            self.evaluate(valid_loader)
+
+        logger.info("Cross-validation complete.")
+
+    def load_data(self):
+        # Load your dataset into a NumPy array or other suitable format
+        data = np.load('your_data_file.npy')  # Adjust based on your data source
+        return data
+
+    def create_data_loader(self, data):
+        # Create a DataLoader for the given dataset
+        return DataLoader(data, batch_size=self.params.batch_size, shuffle=True)
+
+    def reset_parameters(self):
+        # Reset model parameters
+        self.generator.reset_parameters()  # Adjust as per your implementation
+
+    def train_one_epoch(self, train_loader):
+        for batch in train_loader:
+            # Forward pass
+            outputs = self.generator(batch['inputs'])
+            loss = self.compute_loss(outputs, batch['targets'])  # Define your loss function
+            # Backward pass
+            loss.backward()
+            self.generator.optimizer.step()  # Update weights
+            self.generator.optimizer.zero_grad()  # Reset gradients
+
+    def evaluate(self, valid_loader):
+        total_loss = 0
+        for batch in valid_loader:
+            with torch.no_grad():
+                outputs = self.generator(batch['inputs'])
+                loss = self.compute_loss(outputs, batch['targets'])
+                total_loss += loss.item()
+        avg_loss = total_loss / len(valid_loader)
+        logger.info(f'Validation Loss: {avg_loss}')
 
 class EnvDataset(Dataset):
     def __init__(
@@ -1133,3 +1194,5 @@ def select_dico_index(dico, idx):
     for k in dico.keys():
         new_dico[k] = dico[k][idx]
     return new_dico
+
+
