@@ -24,12 +24,11 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import copy
 
-# if torch.cuda.is_available():
 has_apex = True
 try:
     import apex
 except:
-    has_apex - False
+    has_apex = False
 
 logger = getLogger()
 
@@ -81,18 +80,15 @@ class LoadParameters(object):
                 if w.startswith("module"):
                     weights[w.partition(".")[2]] = weights.pop(w)
             v.load_state_dict(weights)
-            v.requires_grad=requires_grad
+            v.requires_grad = requires_grad
 
 
 class Trainer(object):
+
     def __init__(self, modules, env, params, path=None, root=None):
         """
         Initialize trainer.
         """
-        # if torch.cuda.is_available() and params.nvidia_apex is True:
-        #     import apex
-
-        # modules / params
         self.modules = modules
         self.params = params
         self.env = env
@@ -112,9 +108,8 @@ class Trainer(object):
         # float16 / distributed (no AMP)
         assert params.amp >= 1 or not params.fp16
         assert params.amp >= 0 or params.accumulate_gradients == 1
-        # assert not params.multi_gpu or params.amp == -1 or params.nvidia_apex
         assert not params.nvidia_apex or has_apex
-        if params.multi_gpu:  # and params.amp == -1:
+        if params.multi_gpu:
             logger.info("Using nn.parallel.DistributedDataParallel ...")
             for k in self.modules.keys():
                 self.modules[k] = nn.parallel.DistributedDataParallel(
@@ -131,12 +126,6 @@ class Trainer(object):
         self.scaler = None
         if params.amp >= 0:
             self.init_amp()
-            # if params.multi_gpu:
-            #    logger.info("Using apex.parallel.DistributedDataParallel ...")
-            #    for k in self.modules.keys():
-            #        self.modules[k] = apex.parallel.DistributedDataParallel(
-            #            self.modules[k], delay_allreduce=True
-            #        )
 
         # stopping criterion used for early stopping
         if params.stopping_criterion != "":
@@ -177,7 +166,7 @@ class Trainer(object):
         self.last_time = time.time()
 
         # reload potential checkpoints
-        self.reload_checkpoint(path=path,root=root)
+        self.reload_checkpoint(path=path, root=root)
 
         # file handler to export data
         if params.export_data:
@@ -193,14 +182,10 @@ class Trainer(object):
         # reload exported data
         if params.reload_data != "":
             logger.info(params.reload_data)
-            # assert params.num_workers in [0, 1] ##TODO: why have that?
             assert params.export_data is False
             s = [x.split(",") for x in params.reload_data.split(";") if len(x) > 0]
             assert (
-                len(s)
-                >= 1
-                # and all(len(x) == 4 for x in s) ##if we want multiple datasets
-                # and len(s) == len(set([x[0] for x in s]))
+                len(s) >= 1
             )
             self.data_path = {
                 task: (
@@ -213,10 +198,6 @@ class Trainer(object):
 
             logger.info(self.data_path)
 
-            # assert all(
-            #    all(os.path.isfile(path) for path in paths)
-            #    for paths in self.data_path.values()
-            # )
             for task in self.env.TRAINING_TASKS:
                 assert (task in self.data_path) == (task in params.tasks)
         else:
@@ -231,6 +212,57 @@ class Trainer(object):
                 for task in params.tasks
             }
 
+    def cross_validate(self, k_folds=5):
+        """
+        Perform k-fold cross-validation.
+        """
+        all_data = self.load_data()  # Implement load_data to read your dataset
+        fold_size = len(all_data) // k_folds
+        
+        for fold in range(k_folds):
+            logger.info(f"Starting fold {fold + 1}/{k_folds}")
+
+            # Split the data into training and validation sets
+            validation_data = all_data[fold * fold_size:(fold + 1) * fold_size]
+            training_data = np.concatenate([all_data[:fold * fold_size], all_data[(fold + 1) * fold_size:]])
+
+            # Create data loaders
+            self.dataloader = self.create_data_loaders(training_data, validation_data)
+
+            # Reset the trainer's parameters for each fold
+            self.reset_parameters()
+
+            # Train the model
+            for epoch in range(self.params.n_epochs):
+                self.train_one_epoch()
+
+            # Evaluate on validation set
+            self.evaluate(validation_data)
+
+        logger.info("Cross-validation complete.")
+
+    def load_data(self):
+        """ Load your dataset here. """
+        # Implement your data loading logic
+        pass
+
+    def create_data_loaders(self, training_data, validation_data):
+        """ Create data loaders from the training and validation datasets. """
+        # Implement your data loader creation logic
+        pass
+
+    def reset_parameters(self):
+        """ Reset any parameters or states. """
+        pass
+
+    def train_one_epoch(self):
+        """ Implement the logic to train for one epoch. """
+        pass
+
+    def evaluate(self, validation_data):
+        """ Implement the logic to evaluate on the validation dataset. """
+        pass
+
     def set_new_train_iterator_params(self, args={}):
         params = self.params
         if params.env_base_seed < 0:
@@ -242,7 +274,7 @@ class Trainer(object):
             for task in params.tasks
         }
         logger.info(
-            "Succesfully replaced training iterator with following args:{}".format(args)
+            "Successfully replaced training iterator with following args:{}".format(args)
         )
         return
 
@@ -299,22 +331,16 @@ class Trainer(object):
         # check NaN
         if (loss != loss).data.any():
             logger.warning("NaN detected")
-            # exit()
 
         params = self.params
-
-        # optimizer
         optimizer = self.optimizer
 
-        # regular optimization
         if params.amp == -1:
             optimizer.zero_grad()
             loss.backward()
             if params.clip_grad_norm > 0:
                 clip_grad_norm_(self.parameters["model"], params.clip_grad_norm)
             optimizer.step()
-
-        # AMP optimization
         elif params.nvidia_apex is True:
             if (self.n_iter + 1) % params.accumulate_gradients == 0:
                 with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -326,16 +352,12 @@ class Trainer(object):
                 optimizer.step()
                 optimizer.zero_grad()
             else:
-                with apex.amp.scale_loss(
-                    loss, optimizer, delay_unscale=True
-                ) as scaled_loss:
+                with apex.amp.scale_loss(loss, optimizer, delay_unscale=True) as scaled_loss:
                     scaled_loss.backward()
-
         else:
             if params.accumulate_gradients > 1:
                 loss = loss / params.accumulate_gradients
             self.scaler.scale(loss).backward()
-
             if (self.n_iter + 1) % params.accumulate_gradients == 0:
                 if params.clip_grad_norm > 0:
                     self.scaler.unscale_(optimizer)
@@ -393,7 +415,6 @@ class Trainer(object):
         logger.info(s_iter + s_speed + s_mem + s_stat + s_lr + s_total_eq)
 
     def get_generation_statistics(self, task):
-
         total_eqs = sum(x.shape[0] for x in self.infos_statistics[list(self.infos_statistics.keys())[0]])
         logger.info("Generation statistics (to generate {} eqs):".format(total_eqs))
 
@@ -412,7 +433,6 @@ class Trainer(object):
         g.map_lower(sns.kdeplot, fill=True)
         g.map_diag(sns.histplot, kde=True)
         plt.savefig(os.path.join(self.params.dump_path, "statistics_{}.png".format(self.epoch)))
-
 
         str_errors = "Errors ({} eqs)\n ".format(total_eqs)
         for error_type, count in self.errors_statistics.items():
@@ -477,12 +497,9 @@ class Trainer(object):
                 if w.startswith("module"):
                     weights[w.partition(".")[2]] = weights.pop(w)
             v.load_state_dict(weights)
-            v.requires_grad=requires_grad
-
+            v.requires_grad = requires_grad
 
         # reload optimizer
-        # AMP checkpoint reloading is buggy, we cannot reload optimizer
-        # instead, we only reload current iterations / learning rates
         if self.params.amp == -1 or not self.params.nvidia_apex:
             logger.warning("Reloading checkpoint optimizer ...")
             self.optimizer.load_state_dict(data["optimizer"])
@@ -493,12 +510,8 @@ class Trainer(object):
                     logger.warning("No 'num_updates' for optimizer.")
                     continue
                 logger.warning("Reloading 'num_updates' and 'lr' for optimizer.")
-                param_group["num_updates"] = data["optimizer"]["param_groups"][
-                    group_id
-                ]["num_updates"]
-                param_group["lr"] = self.optimizer.get_lr_for_step(
-                    param_group["num_updates"]
-                )
+                param_group["num_updates"] = data["optimizer"]["param_groups"][group_id]["num_updates"]
+                param_group["lr"] = self.optimizer.get_lr_for_step(param_group["num_updates"])
 
         if self.params.fp16 and not self.params.nvidia_apex:
             logger.warning("Reloading gradient scaler ...")
@@ -626,8 +639,8 @@ class Trainer(object):
         def float_list_to_str_lst(lst, float_precision):
             for i in range(len(lst)):
                 for j in range(len(lst[i])):
-                    str_float=f"%.{float_precision}e" % lst[i][j]
-                    lst[i][j]=str_float
+                    str_float = f"%.{float_precision}e" % lst[i][j]
+                    lst[i][j] = str_float
             return lst
             
         processed_e = len(samples)
@@ -638,11 +651,11 @@ class Trainer(object):
             y_to_fit = samples["y_to_fit"][i].tolist()
             x_to_predict = samples["x_to_predict"][i].tolist()
             y_to_predict = samples["y_to_predict"][i].tolist()
-            outputs["x_to_fit"]=float_list_to_str_lst(x_to_fit, self.params.float_precision)
-            outputs["y_to_fit"]=float_list_to_str_lst(y_to_fit, self.params.float_precision)
-            outputs["x_to_predict"]=float_list_to_str_lst(x_to_predict, self.params.float_precision)
-            outputs["y_to_predict"]=float_list_to_str_lst(y_to_predict, self.params.float_precision)
-            outputs["tree"]=samples["tree"][i].prefix()
+            outputs["x_to_fit"] = float_list_to_str_lst(x_to_fit, self.params.float_precision)
+            outputs["y_to_fit"] = float_list_to_str_lst(y_to_fit, self.params.float_precision)
+            outputs["x_to_predict"] = float_list_to_str_lst(x_to_predict, self.params.float_precision)
+            outputs["y_to_predict"] = float_list_to_str_lst(y_to_predict, self.params.float_precision)
+            outputs["tree"] = samples["tree"][i].prefix()
 
             self.file_handler_prefix.write(json.dumps(outputs) + "\n")
             self.file_handler_prefix.flush()
@@ -673,7 +686,7 @@ class Trainer(object):
             for info_type, info in samples["infos"].items():
                 self.infos_statistics[info_type].append(info)
             for error_type, count in errors.items():
-                self.errors_statistics[error_type]+=count
+                self.errors_statistics[error_type] += count
 
         x_to_fit = samples["x_to_fit"]
         y_to_fit = samples["y_to_fit"]
@@ -748,5 +761,3 @@ class Trainer(object):
         self.n_equations += len1.size(0)
         self.stats["processed_e"] += len1.size(0)
         self.stats["processed_w"] += (len1 + len2 - 2).sum().item()
-
-
