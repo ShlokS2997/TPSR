@@ -37,18 +37,13 @@ from contextlib import contextmanager
 
 @contextmanager
 def timeout(time):
-    # Register a function to raise a TimeoutError on the signal.
     signal.signal(signal.SIGALRM, raise_timeout)
-    # Schedule the signal to be sent after ``time``.
     signal.alarm(time)
-
     try:
         yield
     except TimeoutError:
         pass
     finally:
-        # Unregister the signal so it won't be triggered
-        # if the timeout is not reached.
         signal.signal(signal.SIGALRM, signal.SIG_IGN)
 
 def raise_timeout(signum, frame):
@@ -56,7 +51,6 @@ def raise_timeout(signum, frame):
 
 class Simplifier:
     def __init__(self, generator):
-
         self.params = generator.params
         self.encoder = generator.equation_encoder
         self.operators = generator.operators
@@ -74,7 +68,7 @@ class Simplifier:
         }
         for k in generator.variables:
             self.local_dict[k] = sp.Symbol(k, real=True, integer=False)
-        
+
     def expand_expr(self, expr):
         with timeout(1):
             expr = sp.expand(expr)
@@ -102,27 +96,26 @@ class Simplifier:
         def wrapper_fn(_mod, x, constants=None):
             local_dict = {}
             for d in range(x.shape[1]):
-                local_dict["x_{}".format(d)]=x[:, d]
+                local_dict["x_{}".format(d)] = x[:, d]
             if constants is not None:
                 for d in range(constants.shape[0]):
-                    local_dict["CONSTANT_{}".format(d)]=constants[d]
+                    local_dict["CONSTANT_{}".format(d)] = constants[d]
             return _mod(**local_dict)
         return partial(wrapper_fn, mod)
 
     def expr_to_numpy_fn(self, expr):
-
         def wrapper_fn(_expr, x, extra_local_dict={}):
             local_dict = {}
             for d in range(x.shape[1]):
-                local_dict["x_{}".format(d)]=x[:, d]
+                local_dict["x_{}".format(d)] = x[:, d]
             local_dict.update(extra_local_dict)
             variables_symbols = sp.symbols(' '.join(["x_{}".format(d) for d in range(x.shape[1])]))
             extra_symbols = list(extra_local_dict.keys())
-            if len(extra_symbols)>0:
+            if len(extra_symbols) > 0:
                 extra_symbols = sp.symbols(' '.join(extra_symbols))
             else:
-                extra_symbols=()
-            np_fn =  sp.lambdify((*variables_symbols, *extra_symbols), _expr, modules='numpy')
+                extra_symbols = ()
+            np_fn = sp.lambdify((*variables_symbols, *extra_symbols), _expr, modules='numpy')
             return np_fn(**local_dict)
 
         return partial(wrapper_fn, expr)
@@ -134,15 +127,15 @@ class Simplifier:
     def tree_to_numexpr_fn(self, tree):
         infix = tree.infix()
         numexpr_equivalence = {
-                                "add": "+",
-                                "sub": "-",
-                                "mul": "*",
-                                "pow": "**",
-                                "inv": "1/",
+            "add": "+",
+            "sub": "-",
+            "mul": "*",
+            "pow": "**",
+            "inv": "1/",
         }
 
         for old, new in numexpr_equivalence.items():
-            infix=infix.replace(old, new)
+            infix = infix.replace(old, new)
 
         def get_vals(dim, val):
             vals_ar = np.empty((dim,))
@@ -150,18 +143,18 @@ class Simplifier:
             return vals_ar
 
         def wrapped_numexpr_fn(_infix, x, extra_local_dict={}):
-            assert isinstance(x,  np.ndarray) and len(x.shape)==2
+            assert isinstance(x, np.ndarray) and len(x.shape) == 2
             local_dict = {}
             for d in range(self.params.max_input_dimension):
                 if "x_{}".format(d) in _infix:
                     if d >= x.shape[1]: 
-                        local_dict["x_{}".format(d)]=np.zeros(x.shape[0])
+                        local_dict["x_{}".format(d)] = np.zeros(x.shape[0])
                     else:
-                        local_dict["x_{}".format(d)]=x[:,d]
+                        local_dict["x_{}".format(d)] = x[:, d]
             local_dict.update(extra_local_dict)
             try:
                 vals = ne.evaluate(_infix, local_dict=local_dict)
-                if len(vals.shape)==0:
+                if len(vals.shape) == 0:
                     vals = get_vals(x.shape[0], vals)
             except Exception as e:
                 print(e)
@@ -182,7 +175,7 @@ class Simplifier:
         
     def float_to_int_expr(self, expr):
         floats = expr.atoms(sp.Float)
-        ints = [fl for fl in floats if int(fl)==fl]
+        ints = [fl for fl in floats if int(fl) == fl]
         expr = expr.xreplace(dict(zip(ints, [int(i) for i in ints])))
         return expr
         
@@ -190,7 +183,7 @@ class Simplifier:
         expr = self.tree_to_sympy_expr(tree)
         for (fn, arg) in fn_stack:
             expr = getattr(self, fn)(expr=expr, **arg)   
-        new_tree =  self.sympy_expr_to_tree(expr)
+        new_tree = self.sympy_expr_to_tree(expr)
         if new_tree is None:
             new_tree = tree
         return new_tree
@@ -198,7 +191,6 @@ class Simplifier:
     def write_infix(self, token, args):
         """
         Infix representation.
-    
         """
         if token == "add":
             return f"({args[0]})+({args[1]})"
@@ -208,7 +200,7 @@ class Simplifier:
             return f"({args[0]})*({args[1]})"
         elif token == "div":
             return f"({args[0]})/({args[1]})"
-        if token == "pow":
+        elif token == "pow":
             return f"({args[0]})**({args[1]})"
         elif token == "idiv":
             return f"idiv({args[0]},{args[1]})"
@@ -251,7 +243,7 @@ class Simplifier:
                 float(t)
                 t = str(t)
             except ValueError:
-                t=t
+                t = t
             return t, expr[1:]
 
     def prefix_to_sympy_compatible_infix(self, expr):
@@ -271,20 +263,6 @@ class Simplifier:
         """
         n_args = len(expr.args)
 
-        # assert (op == 'add' or op == 'mul') and (n_args >= 2) or (op != 'add' and op != 'mul') and (1 <= n_args <= 2)
-
-        # square root
-        # if op == 'pow':
-        #     if isinstance(expr.args[1], sp.Rational) and expr.args[1].p == 1 and expr.args[1].q == 2:
-        #         return ['sqrt'] + self.sympy_to_prefix(expr.args[0])
-        #     elif str(expr.args[1])=='2':
-        #         return ['sqr'] + self.sympy_to_prefix(expr.args[0])
-        #     elif str(expr.args[1])=='-1':
-        #         return ['inv'] + self.sympy_to_prefix(expr.args[0])
-        #     elif str(expr.args[1])=='-2':
-        #         return ['inv', 'sqr'] + self.sympy_to_prefix(expr.args[0])
-
-        # parse children
         parse_list = []
         for i in range(n_args):
             if i == 0 or i < n_args - 1:
@@ -312,17 +290,6 @@ class Simplifier:
             return ["e"]
         elif expr == sp.pi:
             return ["pi"]
-
-        # if we want div and sub
-        # if isinstance(expr, sp.Mul) and len(expr.args)==2:
-        #    if isinstance(expr.args[0], sp.Mul) and isinstance(expr.args[0].args[0], sp.Pow): return ['div']+self.sympy_to_prefix(expr.args[1])+self.sympy_to_prefix(expr.args[0].args[1])
-        #    if isinstance(expr.args[1], sp.Mul) and isinstance(expr.args[1].args[0], sp.Pow): return ['div']+self.sympy_to_prefix(expr.args[0])+self.sympy_to_prefix(expr.args[1].args[1])
-        # if isinstance(expr, sp.Add) and len(expr.args)==2:
-        #    if isinstance(expr.args[0], sp.Mul) and str(expr.args[0].args[0])=='-1': return ['sub']+self.sympy_to_prefix(expr.args[1])+self.sympy_to_prefix(expr.args[0].args[1])
-        #    if isinstance(expr.args[1], sp.Mul) and str(expr.args[1].args[0])=='-1': return ['sub']+self.sympy_to_prefix(expr.args[0])+self.sympy_to_prefix(expr.args[1].args[1])
-
-        # if isinstance(expr, sp.Pow) and str(expr.args[1])=='-1':
-        #     return ['inv'] + self.sympy_to_prefix(expr.args[0])
 
         # SymPy operator
         for op_type, op_name in self.SYMPY_OPERATORS.items():
@@ -354,3 +321,51 @@ class Simplifier:
         sp.acos: "arccos",
         sp.atan: "arctan",
     }
+
+    def cross_validate(self, k_folds=5):
+        """
+        Perform k-fold cross-validation.
+        """
+        all_data = self.load_data()  # Implement load_data to read your dataset
+        fold_size = len(all_data) // k_folds
+        for fold in range(k_folds):
+            logger.info(f"Starting fold {fold + 1}/{k_folds}")
+
+            # Split the data into training and validation sets
+            validation_data = all_data[fold * fold_size:(fold + 1) * fold_size]
+            training_data = np.concatenate([all_data[:fold * fold_size], all_data[(fold + 1) * fold_size:]])
+
+            # Create data loaders
+            self.dataloader = self.create_data_loaders(training_data, validation_data)
+
+            # Reset the trainer's parameters for each fold
+            self.reset_parameters()
+
+            # Train the model
+            for epoch in range(self.params.n_epochs):
+                self.train_one_epoch()
+
+            # Evaluate on validation set
+            self.evaluate(validation_data)
+
+        logger.info("Cross-validation complete.")
+
+    def load_data(self):
+        # Implement this method to load your dataset
+        pass
+
+    def create_data_loaders(self, training_data, validation_data):
+        # Implement this method to create data loaders
+        pass
+
+    def reset_parameters(self):
+        # Implement this method to reset model parameters if needed
+        pass
+
+    def train_one_epoch(self):
+        # Implement this method to train your model for one epoch
+        pass
+
+    def evaluate(self, validation_data):
+        # Implement this method to evaluate your model on the validation data
+        pass
