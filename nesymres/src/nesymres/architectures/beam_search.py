@@ -61,14 +61,14 @@ def generate_beam(env, dec, decoder_args, beam_size, length_penalty, early_stopp
         dec(trg[:,:-1], enc_src, trg_mask, src_mask)
         # compute word scores
         tensor = decoder(
-            x=generated[:cur_len],
-            lengths=src_len.new(bs * beam_size).fill_(cur_len),
-            positions=positions[:cur_len],
-            causal=True,
-            src_enc=src_enc,
-            src_len=src_len,
-            cache=cache
-        )
+    x=generated[:cur_len],
+    lengths=src_len.new(bs * beam_size).fill_(cur_len),
+    positions=positions[:cur_len],
+    causal=True,
+    src_enc=src_enc,
+    src_len=src_len,
+    cache=cache
+)
         assert tensor.size() == (1, bs * beam_size, env.dim)
         tensor = tensor.data[-1, :, :]          # (bs * beam_size, dim)
         scores = env.proj(tensor)              # (bs * beam_size, n_words)
