@@ -42,137 +42,114 @@ class TimedFun:
 
 
 def bfgs(pred_str, X, y, cfg):
-
-    #Check where dimensions not use, and replace them with 1 to avoid numerical issues with BFGS (i.e. absent variables placed in the denominator)
+    # Check dimensions not used, and replace with 1 to avoid numerical issues with BFGS
     y = y.squeeze()
     X = X.clone()
-    bool_dim = (X==0).all(axis=1).squeeze()
-    X[:,:,bool_dim] = 1 
+    bool_dim = (X == 0).all(axis=1).squeeze()
+    X[:, :, bool_dim] = 1
 
-    if (type(pred_str) != list):
+    if type(pred_str) != list:
         pred_str = pred_str[1:].tolist()
     else:
         pred_str = pred_str[1:]
-    #pred_str = [x if x<14 else x+1 for x in pred_str]
-    raw = data.de_tokenize(pred_str, cfg.id2word)
-    # if "constant" in prefix:
-    #     for j,i in enumerate(list(pred_str)[:-1]):
-    #         if i == "constant":    
-    #             expre[j] = 'c{}'.format(str(c))
-    #             c=c+1
-    #     example = "".join(list(expre))  
 
-    if cfg.bfgs.add_coefficients_if_not_existing and 'constant' not in raw:           
+    raw = data.de_tokenize(pred_str, cfg.id2word)
+
+    # Add constants if needed
+    if cfg.bfgs.add_coefficients_if_not_existing and 'constant' not in raw:
         print("No constants in predicted expression. Attaching them everywhere")
-        variables = {x:sp.Symbol(x, real=True, nonzero=True) for x in cfg.total_variables}
+        variables = {x: sp.Symbol(x, real=True, nonzero=True) for x in cfg.total_variables}
         infix = Generator.prefix_to_infix(raw, coefficients=cfg.total_coefficients, variables=cfg.total_variables)
-        s = Generator.infix_to_sympy(infix,variables, cfg.rewrite_functions)
-        placeholder = {x:sp.Symbol(x, real=True,nonzero=True) for x in ["cm","ca"]}
+        s = Generator.infix_to_sympy(infix, variables, cfg.rewrite_functions)
+        placeholder = {x: sp.Symbol(x, real=True, nonzero=True) for x in ["cm", "ca"]}
         s = add_multiplicative_constants(s, placeholder["cm"], unary_operators=cfg.una_ops)
-        s = add_additive_constants(s,  placeholder, unary_operators=cfg.una_ops)
-        s = s.subs(placeholder["cm"],0.43)
-        s = s.subs(placeholder["ca"],0.421)
-        s_simplified = data.constants_to_placeholder(s,symbol="constant")
+        s = add_additive_constants(s, placeholder, unary_operators=cfg.una_ops)
+        s = s.subs(placeholder["cm"], 0.43)
+        s = s.subs(placeholder["ca"], 0.421)
+        s_simplified = data.constants_to_placeholder(s, symbol="constant")
         prefix = Generator.sympy_to_prefix(s_simplified)
-        candidate = Generator.prefix_to_infix(prefix, 
-                                        coefficients=["constant"], 
-                                        variables=cfg.total_variables)
+        candidate = Generator.prefix_to_infix(prefix, coefficients=["constant"], variables=cfg.total_variables)
     else:
-        candidate = Generator.prefix_to_infix(raw, 
-                                        coefficients=["constant"], 
-                                        variables=cfg.total_variables)
+        candidate = Generator.prefix_to_infix(raw, coefficients=["constant"], variables=cfg.total_variables)
+
     candidate = candidate.format(constant="constant")
-    
-    c = 0 
     expr = candidate
     for i in range(candidate.count("constant")):
-        expr = expr.replace("constant", f"c{i}",1)
-
-    # print('Constructing BFGS loss...')
+        expr = expr.replace("constant", f"c{i}", 1)
 
     if cfg.bfgs.idx_remove:
-        # print('Flag idx remove ON, Removing indeces with high values...')
-        bool_con = (X<200).all(axis=2).squeeze() 
-        X = X[:,bool_con,:]
-        # idx_leave = np.where((np.abs(input_batch[:,3].numpy()))<200)[0]
-        # xx = xx[:,idx_leave]
-        # input_batch = input_batch[idx_leave,:]
-
+        bool_con = (X < 200).all(axis=2).squeeze()
+        X = X[:, bool_con, :]
 
     max_y = np.max(np.abs(torch.abs(y).cpu().numpy()))
-    print('checking input values range...')
     if max_y > 300:
         print('Attention, input values are very large. Optimization may fail due to numerical issues')
 
+    # Construct differences for loss calculation
     diffs = []
     for i in range(X.shape[1]):
         curr_expr = expr
         for idx, j in enumerate(cfg.total_variables):
-            curr_expr = sp.sympify(curr_expr).subs(j,X[:,i,idx]) 
+            curr_expr = sp.sympify(curr_expr).subs(j, X[:, i, idx])
         diff = curr_expr - y[i]
         diffs.append(diff)
-    #         breakpoint()
-    # diff = [sp.sympify(example).replace(y,xx[1,i]).replace(x,xx[0,i]).replace(z,xx[2,i])-input_batch[i,-1] for i in range(input_batch.shape[0])]
-    if cfg.bfgs.normalization_o:
-        raise NotImplementedError
-        diff = [x/max_eq for x in diffs]
-        #diff = [sympify(example).replace(y,xx[1,i]).replace(x,xx[0,i]).replace(z,xx[2,i])-input_batch[i,-1]/max_eq for i in range(input_batch.shape[0])]
-    loss = 0
-    cnt = 0
-    if cfg.bfgs.normalization_type == "NMSE": # and (mean != 0):
+
+    if cfg.bfgs.normalization_type == "NMSE":
         mean_y = np.mean(y.numpy())
         if abs(mean_y) < 1e-06:
             print("Normalizing by a small value")
-        loss = (np.mean(np.square(diffs)))/mean_y  ###3 check
-    elif cfg.bfgs.normalization_type == "MSE": 
+        loss = (np.mean(np.square(diffs))) / mean_y
+    elif cfg.bfgs.normalization_type == "MSE":
         loss = (np.mean(np.square(diffs)))
     else:
         raise KeyError
-    
-    # print('Loss constructed, starting new BFGS optmization...') 
 
-    # Lists where all restarted will be appended
+    # Initialize lists to store results from multiple restarts
     F_loss = []
     consts_ = []
     funcs = []
     symbols = {i: sp.Symbol(f'c{i}') for i in range(candidate.count("constant"))}
-    
-    for i in range(cfg.bfgs.n_restarts):
-        # Compute number of coefficients
-        x0 = np.random.randn(len(symbols))
-        s = list(symbols.values())
-        #bfgs optimization
-        fun_timed = TimedFun(fun=sp.lambdify(s,loss, modules=['numpy']), stop_after=5) #cfg.bfgs.stop_time # 5
-        if len(x0):
-            minimize(fun_timed.fun,x0, method='BFGS')   #check consts interval and if they are int
-            consts_.append(fun_timed.x)
-        else:
-            consts_.append([])
-        final = expr
-        for i in range(len(s)):
-            final = sp.sympify(final).replace(s[i],fun_timed.x[i])
-        if cfg.bfgs.normalization_o:
-            funcs.append(max_y*final)
-        else:
-            funcs.append(final)
-        
-        values = {x:X[:,:,idx].cpu() for idx, x in enumerate(cfg.total_variables)} #CHECK ME
-        equivalence = {
-            "ln": "log"
-        }
-        final = str(final)
-        for old, new in equivalence.items():
-            final = final.replace(old, new)
-        y_found = sp.lambdify(",".join(cfg.total_variables), final)(**values)
-        final_loss = np.mean(np.square(y_found-y.cpu()).numpy())
-        # y_found = ne.evaluate(str(final), values)
-        # final_loss = np.mean(np.square(y_found-y.cpu().numpy()))
-        F_loss.append(final_loss)
+
+    # BFGS optimization loop with torch.no_grad()
+    with torch.no_grad():
+        for i in range(cfg.bfgs.n_restarts):
+            x0 = np.random.randn(len(symbols))
+            s = list(symbols.values())
+
+            # Timed optimization
+            fun_timed = TimedFun(fun=sp.lambdify(s, loss, modules=['numpy']), stop_after=5)
+            if len(x0):
+                minimize(fun_timed.fun, x0, method='BFGS')
+                consts_.append(fun_timed.x)
+            else:
+                consts_.append([])
+
+            # Update the final expression with optimized constants
+            final = expr
+            for i in range(len(s)):
+                final = sp.sympify(final).replace(s[i], fun_timed.x[i])
+
+            # Simplify the final expression (Optional)
+            final = sp.simplify(final)
+
+            if cfg.bfgs.normalization_o:
+                funcs.append(max_y * final)
+            else:
+                funcs.append(final)
+
+            # Evaluate the loss
+            values = {x: X[:, :, idx].cpu() for idx, x in enumerate(cfg.total_variables)}
+            final = str(final)
+            y_found = sp.lambdify(",".join(cfg.total_variables), final)(**values)
+            final_loss = np.mean(np.square(y_found - y.cpu()).numpy())
+            F_loss.append(final_loss)
 
     try:
         k_best = np.nanargmin(F_loss)
     except ValueError:
         print("All-Nan slice encountered")
         k_best = 0
+
     return funcs[k_best], consts_[k_best], F_loss[k_best], expr
+
             
