@@ -12,6 +12,9 @@ epochs: 20
 val_check_interval: 0.02
 precision: 16
 
+# Cross-validation settings
+num_folds: 5  # Number of folds for cross-validation
+
 dataset_train:
   total_variables: #Do not fill
   total_coefficients: #Do not fill
