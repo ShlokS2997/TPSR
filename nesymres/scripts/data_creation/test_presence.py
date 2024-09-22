@@ -15,19 +15,17 @@ from multiprocessing import Manager
 
 
 
-def evaluate_validation_set(validation_eqs: pd.DataFrame, support) -> list:
-    res = list()
+def evaluate_validation_set(validation_eqs: pd.DataFrame, support) -> set:
+    res = set()
     for _, row in validation_eqs.iterrows():
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            variables = [f"x_{i}" for i in range(1,1+support.shape[0])]
-            curr = lambdify(variables,row["eq"])(*support).numpy().astype('float16')
+            variables = [f"x_{i}" for i in range(1, 1 + support.shape[0])]
+            curr = lambdify(variables, row["eq"])(*support).numpy().astype('float16')
             curr = tuple([x if not np.isnan(x) else "nan" for x in curr])
-            # if row["eq"] == "x_1*cos(x_2**3 + x_2)":
-            #     breakpoint()
-            res.append(curr)
-
+            res.add(curr)
     return res
+
 
 
 class Pipeline:
@@ -51,47 +49,29 @@ class Pipeline:
         self.validation_eqs_l = validation_eqs
         self.validation_eqs = set(validation_eqs)
         self.res = Manager().dict()
-
+        
     def is_valid_and_not_in_validation_set(self, idx: int) -> bool:
-        """
-        Assert both symbolically and numerically that the equation is not in the validation set
-        Args:
-            idx: index to the Eq in the dataset
-        """
-        eq = load_eq(self.data_path, idx, self.metadata.eqs_per_hdf)
-        dict_costs = return_dict_metadata_dummy_constant(self.metadata)
-        #dict_costs["cm_0"] = -1
-        #const, dummy_const = sample_symbolic_constants(eq)
-        consts = torch.stack([torch.ones([int(self.support.shape[1])])*dict_costs[key] for key in dict_costs.keys()])
+    eq = load_eq(self.data_path, idx, self.metadata.eqs_per_hdf)
+    dict_costs = return_dict_metadata_dummy_constant(self.metadata)
+    consts = torch.stack([torch.ones([int(self.support.shape[1])]) * dict_costs[key] for key in dict_costs.keys()])
+    input_lambdi = torch.cat([self.support, consts], axis=0)
 
-        #consts = torch.stack([torch.ones([int(self.support.shape[1])]) for i in self.metadata.total_coefficients])
-        input_lambdi = torch.cat([self.support,consts],axis=0)
-        assert input_lambdi.shape[0]  == len(self.metadata.total_coefficients) + len(self.metadata.total_variables)
-        #eq = load_eq(self.data_path, idx, self.metadata.eqs_per_hdf)
-        #variables = [f"x_{i}" for i in range(1,1+self.support.shape[0])]
-        #consts = [c for c in self.metadata.total_coefficients]
-        #symbols = variables + consts
-        
-        # #Symbolic Checking
-        const, dummy_const = sample_symbolic_constants(eq)
-        eq_str = sympify(eq.expr.format(**dummy_const))
-        if str(eq_str) in self.validation_eqs:
-            print("EQUATION IN VAL")
+    const, dummy_const = sample_symbolic_constants(eq)
+    eq_str = sympify(eq.expr.format(**dummy_const))
+    if str(eq_str) in self.validation_eqs:
+        return idx, False  # This equation is in the validation set
 
-        
-        args = [ eq.code,input_lambdi ]
-        y = evaluate_fun(args)
-        curr = [x if not np.isnan(x) else "nan" for x in y]
-        val = tuple(curr)
+    args = [eq.code, input_lambdi]
+    y = evaluate_fun(args)
 
-        if val in self.target_image:
-            index = self.target_image_l.index(val)
-            print("EQUATION IN VAL")
-            if not index in self.res:
-                self.res[index] =  self.validation_eqs_l[index]
-                print(len(self.res))
+    curr = [x if not np.isnan(x) else "nan" for x in y]
+    val = tuple(curr)
 
-        
+    # Check for valid numerical outputs
+    if val in self.target_image:
+        return idx, False
+
+    return idx, True  # Equation is valid
 
 @click.command()
 @click.option("--data_path", default="data/datasets/10000000/")
