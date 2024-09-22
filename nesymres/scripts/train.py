@@ -28,52 +28,54 @@ def main(cfg):
     num_folds = cfg.num_folds
     
     for fold in range(num_folds):
-        print(f"Training fold {fold + 1}/{num_folds}")
+    print(f"Training fold {fold + 1}/{num_folds}")
 
-        # Set up paths for the current fold
-        train_path = Path(hydra.utils.to_absolute_path(f"{cfg.train_path}_fold{fold}"))
-        val_path = Path(hydra.utils.to_absolute_path(f"{cfg.val_path}_fold{fold}"))
+    # Set up paths for the current fold
+    train_path = Path(hydra.utils.to_absolute_path(f"{cfg.train_path}_fold{fold}"))
+    val_path = Path(hydra.utils.to_absolute_path(f"{cfg.val_path}_fold{fold}"))
 
-        # Set up data for the fold
-        data = DataModule(
-            train_path,
-            val_path,
-            None,
-            cfg
-        )
+    if not train_path.exists() or not val_path.exists():
+        raise FileNotFoundError(f"Train or validation path for fold {fold} does not exist.")
 
-        # Initialize the model
-        model = Model(cfg=cfg.architecture)
+    # Set up data for the fold
+    data = DataModule(
+        train_path,
+        val_path,
+        None,
+        cfg
+    )
 
-        # Setup WandB logger if enabled
-        if cfg.wandb:
-            wandb.init(project="ICML")
-            config = wandb.config
-            wandb_logger = WandbLogger()
-        else:
-            wandb_logger = None
+    # Initialize the model
+    model = Model(cfg=cfg.architecture)
 
-        # Checkpoint callback for saving the best model for the current fold
-        checkpoint_callback = ModelCheckpoint(
-            monitor="val_loss",  # Monitors validation loss to save the best model
-            dirpath=f"Exp_weights/fold_{fold}/",  # Save checkpoints in a fold-specific directory
-            filename=train_path.stem + f"_fold{fold}_log_" + "-{epoch:02d}-{val_loss:.2f}",
-            mode="min",
-        )
+    # Setup WandB logger if enabled
+    if cfg.wandb:
+        wandb.init(project="ICML", name=f"fold_{fold}")
+        config = wandb.config
+        wandb_logger = WandbLogger()
+    else:
+        wandb_logger = None
 
-        # Define the PyTorch Lightning Trainer
-        trainer = pl.Trainer(
-            distributed_backend="ddp",
-            gpus=cfg.gpu,
-            max_epochs=cfg.epochs,
-            precision=cfg.precision,
-            logger=wandb_logger,
-            callbacks=[checkpoint_callback],
-        )
+    # Checkpoint callback for saving the best model for the current fold
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss",
+        dirpath=f"Exp_weights/fold_{fold}/",
+        filename=train_path.stem + f"_fold{fold}_log_" + "-{epoch:02d}-{val_loss:.2f}",
+        mode="min",
+    )
 
-        # Start training for the current fold
-        trainer.fit(model, data)
+    # Define the PyTorch Lightning Trainer
+    trainer = pl.Trainer(
+        distributed_backend="ddp",
+        gpus=cfg.gpu,
+        max_epochs=cfg.epochs,
+        precision=cfg.precision,
+        logger=wandb_logger,
+        callbacks=[checkpoint_callback],
+    )
 
+    # Start training for the current fold
+    trainer.fit(model, data)
 
 if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Modify GPU as needed
