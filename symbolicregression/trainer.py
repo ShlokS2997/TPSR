@@ -21,6 +21,8 @@ import torch.nn.functional as F
 import seaborn as sns
 import matplotlib.pyplot as plt
 import copy
+from sklearn.model_selection import KFold
+
 
 # if torch.cuda.is_available():
 has_apex = True
@@ -706,3 +708,22 @@ class Trainer(object):
         self.n_equations += len1.size(0)
         self.stats["processed_e"] += len1.size(0)
         self.stats["processed_w"] += (len1 + len2 - 2).sum().item()
+
+def cross_validate(trainer, X, y, n_splits=5):
+    kf = KFold(n_splits=n_splits)
+    metrics = []
+
+    for train_index, test_index in kf.split(X):
+        X_train, X_test = X[train_index], X[test_index]
+        Y_train, Y_test = y[train_index], y[test_index]
+
+        trainer.set_new_train_iterator_params({"X": X_train, "y": Y_train})  # Adjust based on your implementation
+        trainer.train()  # Assuming you have a method to train the model
+
+        y_pred = trainer.predict(X_test)  # Adjust based on your implementation
+        metric = evaluate_model(y_pred, Y_test)  # Define this function to compute your desired metric
+        metrics.append(metric)
+
+    avg_metric = np.mean(metrics)
+    print(f"Average metric across folds: {avg_metric}")
+    return avg_metric
