@@ -6,6 +6,8 @@ import time
 
 from reward import compute_reward_e2e, compute_reward_nesymres
 from symbolicregression.e2e_model import refine_for_sample
+from sklearn.model_selection import KFold
+
 
 class RLEnv:
     """
@@ -54,7 +56,7 @@ class RLEnv:
         return self.state, reward, done, {}
 
 
-    def get_reward(self, s,mode='train'):
+    def get_reward(self, s, mode='train', n_splits=5):
         """
         Returns:
             The reward of program in s.
@@ -69,18 +71,46 @@ class RLEnv:
         if self.params.backbone_model == 'e2e':
             if (type(s) != list):
                 s = s.tolist()
-            y_pred, model_str, generations_tree = refine_for_sample(self.params, self.model,self.equation_env, s, x_to_fit = self.samples['x_to_fit'],y_to_fit = self.samples['y_to_fit']) 
-            reward = compute_reward_e2e(self.params,self.samples, y_pred, model_str, generations_tree)
+            kf = KFold(n_splits=n_splits)
+            rewards = []
 
-        if self.params.backbone_model == 'nesymres':
-            start_time = time.time()
-            _, reward, _ = compute_reward_nesymres(self.model.X ,self.model.y, s, self.cfg_params)
-            print("time to get reward: ", time.time() - start_time) #bfgs for nesymres is time-consuming
-         
+            # Cross-validation logic
+            for train_index, test_index in kf.split(self.samples['y_to_fit']):
+                y_train = self.samples['y_to_fit'][train_index]
+                y_test = self.samples['y_to_fit'][test_index]
+                
+                # Use y_train for training the model, then predict y_test
+                y_pred, model_str, generations_tree = refine_for_sample(
+                    self.params,
+                    self.model,
+                    self.equation_env,
+                    s,
+                    x_to_fit=self.samples['x_to_fit'][train_index],
+                    y_to_fit=y_train
+                )
+                reward = compute_reward_e2e(self.params, self.samples, y_pred, model_str, generations_tree)
+                rewards.append(reward)
+
+            average_reward = np.mean(rewards)
+
+        elif self.params.backbone_model == 'nesymres':
+            kf = KFold(n_splits=n_splits)
+            rewards = []
+            
+            for train_index, test_index in kf.split(self.model.y):
+                X_train = self.model.X[train_index]
+                y_train = self.model.y[train_index]
+                
+                # Use X_train and y_train for training the model
+                _, reward, _ = compute_reward_nesymres(X_train, y_train, s, self.cfg_params)
+                rewards.append(reward)
+
+            average_reward = np.mean(rewards)
+
         if mode == 'train':
-            self.cached_reward[tuple(s)] = reward
+            self.cached_reward[tuple(s)] = average_reward
 
-        return reward
+        return average_reward
 
     def equality_operator(self, s1, s2):
         return s1 == s2
