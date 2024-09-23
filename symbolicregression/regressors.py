@@ -3,6 +3,7 @@
 
  
 from abc import ABC, abstractmethod
+from sklearn.model_selection import KFold
 import numpy as np
 import scipy
 try: import xgboost as xgb
@@ -185,3 +186,22 @@ class XGBoostRegressor(Regressor):
         if getattr(self, "model", None) is None:
             return None
         return self.model.predict(X)
+def cross_validate(model_class, X, y, n_splits=5):
+    kf = KFold(n_splits=n_splits)
+    metrics = []
+
+    for train_index, test_index in kf.split(X):
+        X_train, X_test = X[train_index], X[test_index]
+        Y_train, Y_test = y[train_index], y[test_index]
+
+        model = model_class()  # Instantiate the model
+        model.fit(X_train, Y_train)  # Fit on training data
+        y_pred = model.predict(X_test)  # Predict on test data
+
+        # Evaluate metrics (e.g., MSE or R2)
+        metric = evaluate_model(y_pred, Y_test)  # Define this function to compute your desired metric
+        metrics.append(metric)
+
+    avg_metric = np.mean(metrics)
+    print(f"Average metric across folds: {avg_metric}")
+    return avg_metric
