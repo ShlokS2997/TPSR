@@ -377,3 +377,33 @@ def get_optimizer(parameters, lr, s):
         )
 
     return optim_fn(parameters, lr=lr, **optim_params)
+def train_with_cross_validation(model, x, y, n_splits=5):
+    kf = KFold(n_splits=n_splits)
+    metrics = []
+
+    for train_index, test_index in kf.split(x):
+        X_train, X_test = x[train_index], x[test_index]
+        Y_train, Y_test = y[train_index], y[test_index]
+
+        optimizer = get_optimizer(model.parameters(), lr=0.001, s='adam')  # Example optimizer
+
+        # Reset model state if necessary
+        model.train()  # Set model to training mode
+        # Add your training loop here
+        for epoch in range(num_epochs):
+            optimizer.zero_grad()
+            # Forward pass
+            outputs = model(X_train)
+            loss = compute_loss(outputs, Y_train)  # Define this function
+            loss.backward()
+            optimizer.step()
+
+        # After training, evaluate the model on the test set
+        model.eval()  # Set model to evaluation mode
+        test_outputs = model(X_test)
+        metric = evaluate_model(test_outputs, Y_test)  # Define this function
+        metrics.append(metric)
+
+    avg_metric = np.mean(metrics)
+    print(f"Average metric across folds: {avg_metric}")
+    return avg_metric
