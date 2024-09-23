@@ -6,12 +6,14 @@ class Model(nn.Module):
     def __init__(self, state_size):
         super(Model, self).__init__()
 
-        self.layers = nn.Sequential(nn.Linear(state_size, 256),
-                                    nn.Tanh(),
-                                    nn.Linear(256, 64),
-                                    nn.Tanh(),
-                                    nn.Linear(64, 1),
-                                    nn.Sigmoid())
+        self.layers = nn.Sequential(
+            nn.Linear(state_size, 256),
+            nn.Tanh(),
+            nn.Linear(256, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
 
     def forward(self, x):
         return self.layers(x)
@@ -46,4 +48,13 @@ class ValueFunc:
             return self.model(state)
 
     def save_model(self, filename):
-        torch.save({self.model.state_dict()}, filename)
+        torch.save(self.model.state_dict(), filename)  # Fixed saving model state
+
+    def reset_parameters(self):
+        """Reset model parameters to initial values."""
+        self.model.apply(self._init_weights)
+
+    def _init_weights(self, layer):
+        if isinstance(layer, nn.Linear):
+            nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
