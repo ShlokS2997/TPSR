@@ -10,7 +10,8 @@ from symbolicregression.metrics import compute_metrics
 from sklearn.base import BaseEstimator
 import symbolicregression.model.utils_wrapper as utils_wrapper
 import traceback
-from sklearn import feature_selection 
+from sklearn import feature_selection
+from sklearn.model_selection import KFold
 
 def corr(X, y, epsilon=1e-10):
     """
@@ -62,76 +63,66 @@ class SymbolicTransformerRegressor(BaseEstimator):
         for arg, val in args.items():
             assert hasattr(self, arg), "{} arg does not exist".format(arg)
             setattr(self, arg, val)
-
+            
     def fit(
         self,
         X,
         Y,
-        verbose=False
-    ):
+        verbose=False,
+        n_splits=5  # Number of cross-validation folds
+):
         self.start_fit = time.time()
 
         if not isinstance(X, list):
             X = [X]
             Y = [Y]
-        n_datasets = len(X)
+            n_datasets = len(X)
 
         self.top_k_features = [None for _ in range(n_datasets)]
         for i in range(n_datasets):
             self.top_k_features[i] = get_top_k_features(X[i], Y[i], k=self.model.env.params.max_input_dimension)
             X[i] = X[i][:, self.top_k_features[i]]
-    
-        scaler = utils_wrapper.StandardScaler() if self.rescale else None
-        scale_params = {}
-        if scaler is not None:
-            scaled_X = []
-            for i, x in enumerate(X):
-                scaled_X.append(scaler.fit_transform(x))
-                scale_params[i]=scaler.get_params()
-        else:
-            scaled_X = X
 
-        inputs, inputs_ids = [], []
-        for seq_id in range(len(scaled_X)):
-            for seq_l in range(len(scaled_X[seq_id])):
-                y_seq = Y[seq_id]
-                if len(y_seq.shape)==1:
-                    y_seq = np.expand_dims(y_seq,-1)
-                if seq_l%self.max_input_points == 0:
+    scaler = utils_wrapper.StandardScaler() if self.rescale else None
+    scale_params = {}
+    if scaler is not None:
+        scaled_X = []
+        for i, x in enumerate(X):
+            scaled_X.append(scaler.fit_transform(x))
+            scale_params[i] = scaler.get_params()
+    else:
+        scaled_X = X
+
+    kf = KFold(n_splits=n_splits, shuffle=True)
+    candidates_per_dataset = defaultdict(list)
+
+    for input_id in range(n_datasets):
+        for train_index, val_index in kf.split(scaled_X[input_id]):
+            X_train, X_val = scaled_X[input_id][train_index], scaled_X[input_id][val_index]
+            y_train, y_val = Y[input_id][train_index], Y[input_id][val_index]
+
+            # Prepare inputs
+            inputs = []
+            for seq_l in range(len(X_train)):
+                if seq_l % self.max_input_points == 0:
                     inputs.append([])
-                    inputs_ids.append(seq_id)
-                inputs[-1].append([scaled_X[seq_id][seq_l], y_seq[seq_l]])
-        if self.max_number_bags>0:
-            inputs = inputs[:self.max_number_bags]
-            inputs_ids = inputs_ids[:self.max_number_bags]
-        forward_time=time.time()
-        outputs = self.model(inputs) 
-        if verbose: print("Finished forward in {} secs".format(time.time()-forward_time))
+                inputs[-1].append([X_train[seq_l], y_train[seq_l]])
+            forward_time = time.time()
 
-        candidates = defaultdict(list)
-        assert len(inputs) == len(outputs), "Problem with inputs and outputs"
-        for i in range(len(inputs)):
-            input_id = inputs_ids[i]
-            candidate = outputs[i]
-            candidates[input_id].extend(candidate)
-        assert len(candidates.keys())==n_datasets
-            
-        self.tree = {}
+            # Run model
+            outputs = self.model(inputs)
+            if verbose: print("Finished forward in {} secs".format(time.time() - forward_time))
 
-        for input_id, candidates_id in candidates.items():
-            if len(candidates_id)==0: 
-                self.tree[input_id]=None
-                continue
-            refined_candidates = self.refine(scaled_X[input_id], Y[input_id], candidates_id, verbose=verbose)
-            for i,candidate in enumerate(refined_candidates):
-                try: 
-                    if scaler is not None:
-                        refined_candidates[i]["predicted_tree"]=scaler.rescale_function(self.model.env, candidate["predicted_tree"], *scale_params[input_id])
-                    else: 
-                        refined_candidates[i]["predicted_tree"]=candidate["predicted_tree"]
-                except:
-                    refined_candidates[i]["predicted_tree"]=candidate["predicted_tree"]
-            self.tree[input_id] = refined_candidates
+            # Process candidates
+            refined_candidates = self.refine(X_train, y_train, outputs, verbose=verbose)
+            for candidate in refined_candidates:
+                candidate["validation_score"] = self.evaluate_tree(candidate["predicted_tree"], X_val, y_val, metric="_mse")
+                candidates_per_dataset[input_id].append(candidate)
+
+    self.tree = {}
+    for input_id, candidates in candidates_per_dataset.items():
+        if candidates:
+            self.tree[input_id] = self.order_candidates(X[input_id], Y[input_id], candidates, metric="_mse", verbose=verbose)
 
 
 
