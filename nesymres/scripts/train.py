@@ -28,7 +28,7 @@ def main(cfg):
     num_folds = cfg.num_folds
     
     for fold in range(num_folds):
-    print(f"Training fold {fold + 1}/{num_folds}")
+        print(f"Training fold {fold + 1}/{num_folds}")
 
     # Set up paths for the current fold
     train_path = Path(hydra.utils.to_absolute_path(f"{cfg.train_path}_fold{fold}"))
