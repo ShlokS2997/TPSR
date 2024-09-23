@@ -2,9 +2,9 @@ from torch import nn
 import torch
 import numpy as np
 from symbolicregression.model.model_wrapper import ModelWrapper
-from symbolicregression.model.sklearn_wrapper import SymbolicTransformerRegressor , get_top_k_features
-import time 
-
+from symbolicregression.model.sklearn_wrapper import SymbolicTransformerRegressor, get_top_k_features
+import time
+from sklearn.model_selection import KFold
 
 class Transformer(nn.Module):
     def __init__(self, params, env, samples):
@@ -29,69 +29,61 @@ class Transformer(nn.Module):
         self.x1, self.src_len = self.embedder(x1)
         self.encoded = self.encoder("fwd", x=self.x1, lengths=self.src_len, causal=False).transpose(0, 1)
 
-    def generate_beams(self, input_ids,
-                top_k,
-                num_beams,
-                length_penalty,
-                early_stopping,
-                max_length,
-                top_k_hash,
-                use_prefix_cache
-                ):
-
+    def generate_beams(self, input_ids, top_k, num_beams, length_penalty, early_stopping, max_length, top_k_hash, use_prefix_cache):
         decoded, tgt_len, generated_hyps, top_k_hash = self.decoder.generate_beam_from_state(
-            self.encoded, self.src_len, input_ids, num_beams,top_k, top_k_hash, use_prefix_cache,length_penalty, early_stopping, max_len=200)
-
+            self.encoded, self.src_len, input_ids, num_beams, top_k, top_k_hash, use_prefix_cache, length_penalty, early_stopping, max_len=200)
         return generated_hyps, top_k_hash
 
     def top_k(self, input_ids, top_k):
-
         top_k_tokens = self.decoder.extract_top_k(
-            self.encoded, self.src_len, input_ids, top_k, max_len=200
-        )
-
+            self.encoded, self.src_len, input_ids, top_k, max_len=200)
         return top_k_tokens
 
-    
-def pred_for_sample_no_refine(model, env,preds,x_to_fit):
-    mw = ModelWrapper(
-            env=env,
-            embedder=model.embedder,
-            encoder=model.encoder,
-            decoder=model.decoder,)
-    generations_tree = list(filter(lambda x: x is not None,
-                [env.idx_to_infix(preds[1:], is_float=False, str_array=False)]))
-    if generations_tree == []: 
-        y = None
-        model_str= None
-    else:
-        numexpr_fn = mw.env.simplifier.tree_to_numexpr_fn(generations_tree[0]) 
-        y = numexpr_fn(x_to_fit[0])[:,0]  
-        model_str = generations_tree[0].infix()
-    return y, model_str , generations_tree
+def evaluate_model(y_pred, y_true):
+    # Implement your evaluation logic here (e.g., MSE, R2, etc.)
+    return np.random.rand()  # Replace with actual evaluation logic
 
-
-def pred_for_sample(model, env,x_to_fit,y_to_fit, refine=True, beam_type='search', beam_size=1):
-    mw = ModelWrapper(
-            env=env,
-            embedder=model.embedder,
-            encoder=model.encoder,
-            decoder=model.decoder,
-            beam_type= beam_type,
-            beam_size= beam_size)
-    dstr = SymbolicTransformerRegressor(model=mw,n_trees_to_refine=beam_size)
+def cross_validate(model, env, x_to_fit, y_to_fit, refine=True, beam_type='search', beam_size=1, n_splits=5):
+    mw = ModelWrapper(env=env, embedder=model.embedder, encoder=model.encoder, decoder=model.decoder, beam_type=beam_type, beam_size=beam_size)
+    dstr = SymbolicTransformerRegressor(model=mw, n_trees_to_refine=beam_size)
     replace_ops = {"add": "+", "mul": "*", "sub": "-", "pow": "**", "inv": "1/"}
-    dstr.fit(x_to_fit[0], y_to_fit[0], verbose=False)
-    if refine:
-        tree = dstr.retrieve_tree(with_infos=True)["relabed_predicted_tree"]
-    else:
-        tree = dstr.retrieve_tree(refinement_type="NoRef", with_infos=True)["relabed_predicted_tree"]
-    model_str = tree.infix()
-    for op,replace_op in replace_ops.items():
-        model_str = model_str.replace(op,replace_op)
-    numexpr_fn = mw.env.simplifier.tree_to_numexpr_fn(tree) 
-    y = numexpr_fn(x_to_fit[0])[:,0]  
-    return y, model_str , [tree]
+    
+    # Initialize KFold for cross-validation
+    kf = KFold(n_splits=n_splits)
+    metrics = []
+
+    for train_index, test_index in kf.split(x_to_fit[0]):
+        X_train, X_test = x_to_fit[0][train_index], x_to_fit[0][test_index]
+        Y_train, Y_test = y_to_fit[0][train_index], y_to_fit[0][test_index]
+
+        dstr.fit(X_train, Y_train, verbose=False)
+
+        if refine:
+            tree = dstr.retrieve_tree(with_infos=True)["relabed_predicted_tree"]
+        else:
+            tree = dstr.retrieve_tree(refinement_type="NoRef", with_infos=True)["relabed_predicted_tree"]
+
+        model_str = tree.infix()
+        for op, replace_op in replace_ops.items():
+            model_str = model_str.replace(op, replace_op)
+
+        numexpr_fn = mw.env.simplifier.tree_to_numexpr_fn(tree)
+        y_pred = numexpr_fn(X_test)[:, 0]
+
+        metrics.append(evaluate_model(y_pred, Y_test))
+
+    avg_metric = np.mean(metrics)
+    print(f"Average metric across folds: {avg_metric}")
+
+    return y_pred, model_str, [tree]
+
+def pred_for_sample(model, env, x_to_fit, y_to_fit, refine=True, beam_type='search', beam_size=1):
+    return cross_validate(model, env, x_to_fit, y_to_fit, refine, beam_type, beam_size)
+
+
+def evaluate_model(y_pred, y_true):
+    # Implement your evaluation logic here (e.g., MSE, R2, etc.)
+    return np.random.rand()  # Replace with actual evaluation logic
 
 
 def refine_for_sample(params, model, env, preds ,x_to_fit, y_to_fit):
@@ -125,37 +117,43 @@ def refine_for_sample(params, model, env, preds ,x_to_fit, y_to_fit):
 
     replace_ops = {"add": "+", "mul": "*", "sub": "-", "pow": "**", "inv": "1/"}
 
-    generations_tree = list(filter(lambda x: x is not None,
-                [env.idx_to_infix(preds[1:], is_float=False, str_array=False)]))
+# Initialize KFold for cross-validation
+    kf = KFold(n_splits=n_splits)
 
-    if generations_tree == []: 
-        y = None
-        model_str= None
-        tree = None
-    else:
-        dstr.start_fit = time.time()
-        X = x_to_fit[0]
-        Y = y_to_fit[0]
-        if not isinstance(X, list):
-            X = [X]
-            Y = [Y]
-        n_datasets = len(X)
-        dstr.top_k_features = [None for _ in range(n_datasets)]
-        for i in range(n_datasets):
-            dstr.top_k_features[i] = get_top_k_features(X[i], Y[i], k=dstr.model.env.params.max_input_dimension)
-            X[i] = X[i][:, dstr.top_k_features[i]]
-        dstr.tree = {}
+    # Prepare to store metrics
+    metrics = []
 
-        refined_candidate = dstr.refine(X[0], Y[0], generations_tree, verbose=False)
-        dstr.tree[0] = refined_candidate
+    # Cross-validation loop
+    for train_index, test_index in kf.split(x_to_fit[0]):
+        X_train, X_test = x_to_fit[0][train_index], x_to_fit[0][test_index]
+        Y_train, Y_test = y_to_fit[0][train_index], y_to_fit[0][test_index]
 
-        tree = dstr.retrieve_tree(with_infos=True)["relabed_predicted_tree"]
+        dstr.fit(X_train, Y_train, verbose=False)
+
+        if refine:
+            tree = dstr.retrieve_tree(with_infos=True)["relabed_predicted_tree"]
+        else:
+            tree = dstr.retrieve_tree(refinement_type="NoRef", with_infos=True)["relabed_predicted_tree"]
+        
         model_str = tree.infix()
-        for op,replace_op in replace_ops.items():
-            model_str = model_str.replace(op,replace_op)
+        for op, replace_op in replace_ops.items():
+            model_str = model_str.replace(op, replace_op)
 
-        numexpr_fn = mw.env.simplifier.tree_to_numexpr_fn(tree) 
-        y = numexpr_fn(x_to_fit[0])[:,0]  
+        numexpr_fn = mw.env.simplifier.tree_to_numexpr_fn(tree)
+        y_pred = numexpr_fn(X_test)[:, 0]
+        
+        # Placeholder for storing evaluation metrics
+        metrics.append(evaluate_model(y_pred, Y_test))  # Replace with your evaluation function
+
+    avg_metric = np.mean(metrics)
+    print(f"Average metric across folds: {avg_metric}")
+
+    return y_pred, model_str, [tree]
+
+
+def evaluate_model(y_pred, y_true):
+    # Implement your evaluation logic here (e.g., MSE, R2, etc.)
+    return np.random.rand()  # Replace with actual evaluation logic
 
     return y, model_str, [tree]
 
