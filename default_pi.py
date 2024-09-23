@@ -3,6 +3,8 @@ import time
 import torch
 import numpy as np
 from value_func import ValueFunc
+from sklearn.model_selection import KFold
+
 
 class E2EHeuristic:
     def __init__(self,
@@ -60,60 +62,64 @@ class E2EHeuristic:
         return self.use_value_mode
 
     def get_predict_sequence(self, state, ret_states=False):
-        """
-        Args:
-            ret_states: Return the hidden states of the Transformer in the generation process.
-            Only used to train a value function so far.
-        Returns:
-            Get the most likely sequence starting from state.
-        """
-        with torch.no_grad():
-            encoded_ids = state
-            input_ids = torch.LongTensor(encoded_ids).unsqueeze(0).to(self.device)
+    """
+    Args:
+        ret_states: Return the hidden states of the Transformer in the generation process.
+        Only used to train a value function so far.
+    Returns:
+        Get the most likely sequence starting from state.
+    """
+    with torch.no_grad():
+        encoded_ids = state
+        input_ids = torch.LongTensor(encoded_ids).unsqueeze(0).to(self.device)
 
-            if self.use_seq_cache and self.num_beams == 1:
-                # If no beam search is used, if the prefix of a previously generated sequences generated state matches
-                # state, Transformer will generate the exact sequence. So use cache.
-                for cached_ids in self.output_hash:
-                    if encoded_ids == cached_ids[:len(encoded_ids)]:
-                        if self.debug: print('sequence cache hit')
-                        return cached_ids
+        if self.use_seq_cache and self.num_beams == 1:
+            for cached_ids in self.output_hash:
+                if encoded_ids == cached_ids[:len(encoded_ids)]:
+                    if self.debug: print('sequence cache hit')
+                    return cached_ids
 
-            start_time = time.time()
+        # Implement cross-validation logic
+        kf = KFold(n_splits=5, shuffle=True, random_state=42)  # Example with 5 folds
+        all_output_ids = []
+
+        for train_index, val_index in kf.split(input_ids):
+            # Split input_ids into training and validation sets
+            train_ids, val_ids = input_ids[train_index], input_ids[val_index]
+            
+            # Fit model using train_ids (This part might need to be adjusted based on your model fitting method)
             generated_hyps, top_k_hash_updated = self.model.generate_beams(
-                input_ids,
+                train_ids,
                 top_k=self.k,
                 num_beams=self.num_beams,
-                length_penalty = self.length_penalty,
+                length_penalty=self.length_penalty,
                 early_stopping=True,
                 max_length=self.horizon,
-                top_k_hash = self.top_k_hash,
-                use_prefix_cache = self.use_prefix_cache
+                top_k_hash=self.top_k_hash,
+                use_prefix_cache=self.use_prefix_cache
             )
             self.top_k_hash = top_k_hash_updated
             
-            output_ids_list = []
-            for b in range(self.num_beams):
-                output_ids_list.append(generated_hyps[0].hyp[b][1])
+            # Collect predictions for validation
+            output_ids_list = [generated_hyps[0].hyp[b][1] for b in range(self.num_beams)]
+            all_output_ids.append(output_ids_list)
 
-            if len(output_ids_list) > 1:
-                # if got multiple output_ids using beam search, pick the one that has the highest reward
-                cand_rewards = [self.rl_env.get_reward(output_ids) for output_ids in output_ids_list]
-                output_ids = output_ids_list[np.argmax(cand_rewards)]
-            else:
-                output_ids = output_ids_list[0]
+        # Aggregate the results from all folds
+        # Logic to determine the final output_id based on aggregated output_ids
 
-            if self.use_seq_cache:
-                self.output_hash.append(output_ids.tolist())
+        # (Insert your logic here to select the best output_ids)
+        final_output_ids = all_output_ids[0]  # Placeholder logic for selection
+        
+        if self.use_seq_cache:
+            self.output_hash.append(final_output_ids.tolist())
 
-            self.sample_times += 1
+        self.sample_times += 1
+        self.candidate_programs.append(final_output_ids)
 
-            self.candidate_programs.append(output_ids)
-
-            if self.train_value_mode and ret_states:
-                return output_ids, last_layers
-            else:
-                return output_ids
+        if self.train_value_mode and ret_states:
+            return final_output_ids, last_layers
+        else:
+            return final_output_ids
 
     def get_top_k_predict(self, state):
         """
@@ -303,3 +309,21 @@ class NesymresHeuristic:
             # clear hashed key, value pairs that are not consistent with new_state
             self.model.prefix_key_values.clear(new_state)
             self.model.top_k_hash.clear(new_state)
+from sklearn.model_selection import KFold
+
+def cross_validate(self, data, k=5):
+    kf = KFold(n_splits=k)
+    metrics = []
+    
+    for train_index, val_index in kf.split(data):
+        train_data, val_data = data[train_index], data[val_index]
+        
+        # Fit your model on train_data
+        self.fit(train_data)
+        
+        # Evaluate on val_data
+        val_metrics = self.evaluate(val_data)
+        metrics.append(val_metrics)
+    
+    avg_metrics = np.mean(metrics, axis=0)
+    print(f'Average metrics across {k} folds: {avg_metrics}')
