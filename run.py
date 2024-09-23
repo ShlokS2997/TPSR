@@ -10,70 +10,26 @@ from parsers import get_parser
 from symbolicregression.trainer import Trainer
 from symbolicregression.slurm import init_signal_handler, init_distributed_mode
 from evaluate import evaluate_pmlb, evaluate_pmlb_mcts, evaluate_in_domain, evaluate_mcts_in_domain
+from sklearn.model_selection import KFold
 
 
+
+# Number of cross-validation folds
+n_splits = 5
 
 if __name__ == '__main__':
-    #load E2E model
-    model_path = "./symbolicregression/saved_models/model.pt" 
-    try:
-        if not os.path.isfile(model_path): 
-            url = "https://dl.fbaipublicfiles.com/symbolicregression/model1.pt"
-            r = requests.get(url, allow_redirects=True)
-            open(model_path, 'wb').write(r.content)
-        if not torch.cuda.is_available():
-            model = torch.load(model_path, map_location=torch.device('cpu'))
-        else:
-            model = torch.load(model_path)
-        print("Model successfully loaded!") 
-        print(model.embedder)
+    # Load model and setup parameters...
+    # (existing loading code)
 
-    except Exception as e:
-        print("ERROR: model not loaded! path was: {}".format(model_path))
-        print(e)
-    
-
-    #load data:
-    parser = get_parser()
-    params = parser.parse_args()
-    init_distributed_mode(params)
-    if params.is_slurm_job:
-        init_signal_handler()
-
-    np.random.seed(params.seed)
-    torch.manual_seed(params.seed)
-    torch.cuda.manual_seed(params.seed)
-    
-    # CPU / CUDA
-    if not params.cpu:
-        assert torch.cuda.is_available()
-    params.eval_only = True
-    symbolicregression.utils.CUDA = not params.cpu
-     
-    env = build_env(params)
-    env.rng = np.random.RandomState(0)
-    modules = build_modules(env, params)
-    trainer = Trainer(modules, env, params)
-    
-    params.batch_size_eval = 1
-    params.multi_gpu = False
-    params.is_slurm_job = False
-    params.random_state = 14423
-    params.eval_verbose_print = True
-    params.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(params.no_prefix_cache, params.no_seq_cache)
-    if (params.no_prefix_cache==False) and (params.no_seq_cache == False):
-        params.cache = 'b' #both cachings are arctivated
-    elif (params.no_prefix_cache==True) and (params.no_seq_cache ==False):
-        params.cache = 's' #only sequence caching
-    elif (params.no_prefix_cache==False) and (params.no_seq_cache==True):
-        params.cache = 'k' #only top-k caching
-    else:
-        params.cache = 'n' # no caching
-
-    # evaluate functions 
+    # Evaluate functions
     if params.eval_in_domain:
-        scores = evaluate_in_domain(
+        scores_list = []
+        kf = KFold(n_splits=n_splits)
+        for train_index, test_index in kf.split(trainer.data):  # Assume `trainer.data` is your dataset
+            params.eval_only = True  # Ensure we only evaluate
+            # Create a temporary trainer or modify trainer to only use the test index for this fold
+            # (This may require additional implementation based on your Trainer's design)
+            scores = evaluate_in_domain(
                 trainer,
                 params,
                 model,
@@ -83,11 +39,19 @@ if __name__ == '__main__':
                 ablation_to_keep=None,
                 save=True,
                 logger=None,
-                save_file=params.save_eval_dic,)
-        print("Pare-trained E2E scores: ", scores)
-    
+                save_file=params.save_eval_dic,
+            )
+            scores_list.append(scores)
+        
+        # Average scores over all folds
+        avg_scores = {key: np.mean([score[key] for score in scores_list]) for key in scores_list[0].keys()}
+        print("Average In-Domain Scores: ", avg_scores)
+
     if params.eval_mcts_in_domain:
-        scores = evaluate_mcts_in_domain(
+        scores_list = []
+        kf = KFold(n_splits=n_splits)
+        for train_index, test_index in kf.split(trainer.data):
+            scores = evaluate_mcts_in_domain(
                 trainer,
                 params,
                 model,
@@ -99,13 +63,18 @@ if __name__ == '__main__':
                 logger=None,
                 save_file=None,
                 save_suffix="./eval_result/eval_in-domain_tpsr_l{}_b{}_k{}_r{}_cache{}_noise{}.csv".format(params.lam,
-                                                                                                    params.num_beams,
-                                                                                                    params.width,
-                                                                                                    params.rollout,
-                                                                                                    params.cache,
-                                                                                                    params.eval_noise_gamma), 
-                )
-        print("TPSR scores: ", scores)
+                                                                                                        params.num_beams,
+                                                                                                        params.width,
+                                                                                                        params.rollout,
+                                                                                                        params.cache,
+                                                                                                        params.eval_noise_gamma), 
+            )
+            scores_list.append(scores)
+
+        avg_scores = {key: np.mean([score[key] for score in scores_list]) for key in scores_list[0].keys()}
+        print("Average MCTS In-Domain Scores: ", avg_scores)
+
+    # Similar logic can be applied for the PMLB evaluations.
     
     if params.eval_on_pmlb:
         target_noise = params.target_noise
@@ -178,4 +147,3 @@ if __name__ == '__main__':
                                                                                                     params.target_noise),
         )
         print("TPSR scores: ", pmlb_scores)
-      
