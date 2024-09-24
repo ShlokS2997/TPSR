@@ -12,7 +12,7 @@ from functools import partial
 import traceback
 from timeout import timeout 
 from sklearn.model_selection import KFold  # Import KFold
-
+import symbolicregression.model.sklearn_wrapper as sklearn_wrapper
 
 class TimedFun:
     def __init__(self, fun, verbose=False, stop_after=3):
@@ -204,7 +204,7 @@ class BFGSRefinement():
         best_constants = objective_numpy_timed.best_x
         return env.wrap_equation_floats(tree, best_constants)
 
-class SymbolicTransformerRegressor(BaseEstimator):
+class SymbolicTransformerRegressor(sklearn_wrapper.BaseEstimator):
     def __init__(self,
                 model=None,
                 max_input_points=10000,
@@ -244,7 +244,7 @@ class SymbolicTransformerRegressor(BaseEstimator):
 
         self.top_k_features = [None for _ in range(n_datasets)]
         for i in range(n_datasets):
-            self.top_k_features[i] = get_top_k_features(X[i], Y[i], k=self.model.env.params.max_input_dimension)
+            self.top_k_features[i] = sklearn_wrapper.get_top_k_features(X[i], Y[i], k=self.model.env.params.max_input_dimension)
             X[i] = X[i][:, self.top_k_features[i]]
 
         # Prepare to store metrics
@@ -255,7 +255,7 @@ class SymbolicTransformerRegressor(BaseEstimator):
             X_train, X_test = X[0][train_index], X[0][test_index]
             Y_train, Y_test = Y[0][train_index], Y[0][test_index]
 
-            scaler = utils_wrapper.StandardScaler() if self.rescale else None
+            scaler = StandardScaler() if self.rescale else None
             scale_params = {}
             if scaler is not None:
                 scaled_X = scaler.fit_transform(X_train)
