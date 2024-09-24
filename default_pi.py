@@ -62,64 +62,64 @@ class E2EHeuristic:
         return self.use_value_mode
 
     def get_predict_sequence(self, state, ret_states=False):
-    """
-    Args:
-        ret_states: Return the hidden states of the Transformer in the generation process.
-        Only used to train a value function so far.
-    Returns:
-        Get the most likely sequence starting from state.
-    """
-    with torch.no_grad():
-        encoded_ids = state
-        input_ids = torch.LongTensor(encoded_ids).unsqueeze(0).to(self.device)
+        """
+        Args:
+            ret_states: Return the hidden states of the Transformer in the generation process.
+            Only used to train a value function so far.
+        Returns:
+            Get the most likely sequence starting from state.
+        """
+        with torch.no_grad():
+            encoded_ids = state
+            input_ids = torch.LongTensor(encoded_ids).unsqueeze(0).to(self.device)
 
-        if self.use_seq_cache and self.num_beams == 1:
-            for cached_ids in self.output_hash:
-                if encoded_ids == cached_ids[:len(encoded_ids)]:
-                    if self.debug: print('sequence cache hit')
-                    return cached_ids
+            if self.use_seq_cache and self.num_beams == 1:
+                for cached_ids in self.output_hash:
+                    if encoded_ids == cached_ids[:len(encoded_ids)]:
+                        if self.debug: print('sequence cache hit')
+                        return cached_ids
 
-        # Implement cross-validation logic
-        kf = KFold(n_splits=5, shuffle=True, random_state=42)  # Example with 5 folds
-        all_output_ids = []
+            # Implement cross-validation logic
+            kf = KFold(n_splits=5, shuffle=True, random_state=42)  # Example with 5 folds
+            all_output_ids = []
 
-        for train_index, val_index in kf.split(input_ids):
-            # Split input_ids into training and validation sets
-            train_ids, val_ids = input_ids[train_index], input_ids[val_index]
+            for train_index, val_index in kf.split(input_ids):
+                # Split input_ids into training and validation sets
+                train_ids, val_ids = input_ids[train_index], input_ids[val_index]
+                
+                # Fit model using train_ids (This part might need to be adjusted based on your model fitting method)
+                generated_hyps, top_k_hash_updated = self.model.generate_beams(
+                    train_ids,
+                    top_k=self.k,
+                    num_beams=self.num_beams,
+                    length_penalty=self.length_penalty,
+                    early_stopping=True,
+                    max_length=self.horizon,
+                    top_k_hash=self.top_k_hash,
+                    use_prefix_cache=self.use_prefix_cache
+                )
+                self.top_k_hash = top_k_hash_updated
+                
+                # Collect predictions for validation
+                output_ids_list = [generated_hyps[0].hyp[b][1] for b in range(self.num_beams)]
+                all_output_ids.append(output_ids_list)
+
+            # Aggregate the results from all folds
+            # Logic to determine the final output_id based on aggregated output_ids
+
+            # (Insert your logic here to select the best output_ids)
+            final_output_ids = all_output_ids[0]  # Placeholder logic for selection
             
-            # Fit model using train_ids (This part might need to be adjusted based on your model fitting method)
-            generated_hyps, top_k_hash_updated = self.model.generate_beams(
-                train_ids,
-                top_k=self.k,
-                num_beams=self.num_beams,
-                length_penalty=self.length_penalty,
-                early_stopping=True,
-                max_length=self.horizon,
-                top_k_hash=self.top_k_hash,
-                use_prefix_cache=self.use_prefix_cache
-            )
-            self.top_k_hash = top_k_hash_updated
-            
-            # Collect predictions for validation
-            output_ids_list = [generated_hyps[0].hyp[b][1] for b in range(self.num_beams)]
-            all_output_ids.append(output_ids_list)
+            if self.use_seq_cache:
+                self.output_hash.append(final_output_ids.tolist())
 
-        # Aggregate the results from all folds
-        # Logic to determine the final output_id based on aggregated output_ids
+            self.sample_times += 1
+            self.candidate_programs.append(final_output_ids)
 
-        # (Insert your logic here to select the best output_ids)
-        final_output_ids = all_output_ids[0]  # Placeholder logic for selection
-        
-        if self.use_seq_cache:
-            self.output_hash.append(final_output_ids.tolist())
-
-        self.sample_times += 1
-        self.candidate_programs.append(final_output_ids)
-
-        if self.train_value_mode and ret_states:
-            return final_output_ids, last_layers
-        else:
-            return final_output_ids
+            if self.train_value_mode and ret_states:
+                return final_output_ids, last_layers
+            else:
+                return final_output_ids
 
     def get_top_k_predict(self, state):
         """
