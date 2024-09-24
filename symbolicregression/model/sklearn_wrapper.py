@@ -83,46 +83,46 @@ class SymbolicTransformerRegressor(BaseEstimator):
             self.top_k_features[i] = get_top_k_features(X[i], Y[i], k=self.model.env.params.max_input_dimension)
             X[i] = X[i][:, self.top_k_features[i]]
 
-    scaler = utils_wrapper.StandardScaler() if self.rescale else None
-    scale_params = {}
-    if scaler is not None:
-        scaled_X = []
-        for i, x in enumerate(X):
-            scaled_X.append(scaler.fit_transform(x))
-            scale_params[i] = scaler.get_params()
-    else:
-        scaled_X = X
+        scaler = utils_wrapper.StandardScaler() if self.rescale else None
+        scale_params = {}
+        if scaler is not None:
+            scaled_X = []
+            for i, x in enumerate(X):
+                scaled_X.append(scaler.fit_transform(x))
+                scale_params[i] = scaler.get_params()
+        else:
+            scaled_X = X
 
-    kf = KFold(n_splits=n_splits, shuffle=True)
-    candidates_per_dataset = defaultdict(list)
+        kf = KFold(n_splits=n_splits, shuffle=True)
+        candidates_per_dataset = defaultdict(list)
 
-    for input_id in range(n_datasets):
-        for train_index, val_index in kf.split(scaled_X[input_id]):
-            X_train, X_val = scaled_X[input_id][train_index], scaled_X[input_id][val_index]
-            y_train, y_val = Y[input_id][train_index], Y[input_id][val_index]
+        for input_id in range(n_datasets):
+            for train_index, val_index in kf.split(scaled_X[input_id]):
+                X_train, X_val = scaled_X[input_id][train_index], scaled_X[input_id][val_index]
+                y_train, y_val = Y[input_id][train_index], Y[input_id][val_index]
 
-            # Prepare inputs
-            inputs = []
-            for seq_l in range(len(X_train)):
-                if seq_l % self.max_input_points == 0:
-                    inputs.append([])
-                inputs[-1].append([X_train[seq_l], y_train[seq_l]])
-            forward_time = time.time()
+                # Prepare inputs
+                inputs = []
+                for seq_l in range(len(X_train)):
+                    if seq_l % self.max_input_points == 0:
+                        inputs.append([])
+                    inputs[-1].append([X_train[seq_l], y_train[seq_l]])
+                forward_time = time.time()
 
-            # Run model
-            outputs = self.model(inputs)
-            if verbose: print("Finished forward in {} secs".format(time.time() - forward_time))
+                # Run model
+                outputs = self.model(inputs)
+                if verbose: print("Finished forward in {} secs".format(time.time() - forward_time))
 
-            # Process candidates
-            refined_candidates = self.refine(X_train, y_train, outputs, verbose=verbose)
-            for candidate in refined_candidates:
-                candidate["validation_score"] = self.evaluate_tree(candidate["predicted_tree"], X_val, y_val, metric="_mse")
-                candidates_per_dataset[input_id].append(candidate)
+                # Process candidates
+                refined_candidates = self.refine(X_train, y_train, outputs, verbose=verbose)
+                for candidate in refined_candidates:
+                    candidate["validation_score"] = self.evaluate_tree(candidate["predicted_tree"], X_val, y_val, metric="_mse")
+                    candidates_per_dataset[input_id].append(candidate)
 
-    self.tree = {}
-    for input_id, candidates in candidates_per_dataset.items():
-        if candidates:
-            self.tree[input_id] = self.order_candidates(X[input_id], Y[input_id], candidates, metric="_mse", verbose=verbose)
+        self.tree = {}
+        for input_id, candidates in candidates_per_dataset.items():
+            if candidates:
+                self.tree[input_id] = self.order_candidates(X[input_id], Y[input_id], candidates, metric="_mse", verbose=verbose)
 
 
 
